@@ -1,4 +1,4 @@
-# ASM Platform — Gestión de Activos y Vulnerabilidades Multi-Cliente
+# SentinelScope — Gestión de Activos y Vulnerabilidades Multi-Cliente
 
 Plataforma para reconocimiento (pasivo + activo), descubrimiento de servicios
 y escaneo de vulnerabilidades sobre los dominios de tus clientes, con
@@ -7,7 +7,7 @@ aislamiento multi-tenant, RBAC y dashboard tipo "Nuclei Results".
 ## Contenido del proyecto
 
 ```
-asm-platform/
+sentinelscope/
   db/init.sql              # Esquema Postgres + Row-Level Security
   api/                     # API FastAPI + tareas Celery (lógica de negocio)
     Dockerfile              # Imagen liviana, sin herramientas de escaneo
@@ -38,7 +38,7 @@ asm-platform/
 ## Arranque
 
 ```bash
-cd asm-platform
+cd sentinelscope
 cp .env.example .env   # editar JWT_SECRET
 docker compose build   # primera vez: tarda (instala todas las herramientas)
 docker compose up -d

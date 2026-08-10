@@ -1,5 +1,5 @@
 -- =====================================================================
--- ASM Platform - Esquema inicial de base de datos
+-- SentinelScope - Esquema inicial de base de datos
 -- Multi-tenant con Row-Level Security (RLS)
 -- =====================================================================
 

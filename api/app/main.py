@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .routers import auth, users, clients, domains, subdomains, services, scans, vulnerabilities
 from .bootstrap import ensure_admin_user
 
-app = FastAPI(title="ASM Platform API", version="1.0.0")
+app = FastAPI(title="SentinelScope API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
