@@ -1,0 +1,235 @@
+-- =====================================================================
+-- ASM Platform - Esquema inicial de base de datos
+-- Multi-tenant con Row-Level Security (RLS)
+-- =====================================================================
+
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- ---------------------------------------------------------------------
+-- Clientes
+-- ---------------------------------------------------------------------
+CREATE TABLE clients (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name            TEXT NOT NULL UNIQUE,
+    description     TEXT,
+    active          BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ---------------------------------------------------------------------
+-- Usuarios y roles
+-- ---------------------------------------------------------------------
+CREATE TYPE user_role AS ENUM ('admin', 'client_admin', 'viewer_all', 'viewer_scoped');
+
+CREATE TABLE users (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email           TEXT NOT NULL UNIQUE,
+    password_hash   TEXT NOT NULL,
+    full_name       TEXT NOT NULL,
+    role            user_role NOT NULL,
+    active          BOOLEAN NOT NULL DEFAULT TRUE,
+    must_change_password BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_login_at   TIMESTAMPTZ
+);
+
+CREATE TYPE access_level AS ENUM ('admin', 'viewer');
+
+CREATE TABLE user_client_access (
+    user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    client_id   UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    access_level access_level NOT NULL,
+    PRIMARY KEY (user_id, client_id)
+);
+
+-- ---------------------------------------------------------------------
+-- Activos: dominios -> subdominios -> hosts -> servicios
+-- ---------------------------------------------------------------------
+CREATE TYPE scan_status AS ENUM ('never_scanned', 'queued', 'scanning', 'scanned', 'error');
+
+CREATE TABLE domains (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    client_id       UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    name            TEXT NOT NULL,
+    authorization_reference TEXT, -- evidencia de autorización del cliente para escanear
+    status          scan_status NOT NULL DEFAULT 'never_scanned',
+    created_by      UUID REFERENCES users(id),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_scan_at    TIMESTAMPTZ,
+    UNIQUE (client_id, name)
+);
+
+CREATE TABLE subdomains (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    domain_id           UUID NOT NULL REFERENCES domains(id) ON DELETE CASCADE,
+    client_id           UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    name                TEXT NOT NULL,
+    discovery_source    TEXT, -- subfinder | amass | assetfinder | shuffledns | manual
+    status              scan_status NOT NULL DEFAULT 'never_scanned',
+    discovered_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_scan_at        TIMESTAMPTZ,
+    UNIQUE (domain_id, name)
+);
+
+CREATE TABLE hosts (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    subdomain_id    UUID NOT NULL REFERENCES subdomains(id) ON DELETE CASCADE,
+    client_id       UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    ip_address      INET NOT NULL,
+    ip_version      SMALLINT NOT NULL DEFAULT 4,
+    first_seen      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (subdomain_id, ip_address)
+);
+
+CREATE TABLE services (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    host_id         UUID NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    client_id       UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    port            INTEGER NOT NULL,
+    protocol        TEXT NOT NULL DEFAULT 'tcp',
+    service_name    TEXT,          -- ej: http, ssh, mysql
+    product         TEXT,          -- ej: nginx, OpenSSH
+    version         TEXT,          -- ej: 1.18.0
+    banner          TEXT,
+    cpe             TEXT,
+    status          scan_status NOT NULL DEFAULT 'never_scanned', -- estado del vuln-scan
+    discovered_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_scan_at    TIMESTAMPTZ,
+    UNIQUE (host_id, port, protocol)
+);
+
+-- ---------------------------------------------------------------------
+-- Vulnerabilidades
+-- ---------------------------------------------------------------------
+CREATE TYPE severity_level AS ENUM ('critical', 'high', 'medium', 'low', 'info');
+CREATE TYPE finding_status AS ENUM ('open', 'false_positive', 'remediated', 'accepted_risk');
+
+CREATE TABLE vulnerabilities (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    service_id      UUID NOT NULL REFERENCES services(id) ON DELETE CASCADE,
+    client_id       UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    source          TEXT NOT NULL,     -- nuclei | nmap_nse | searchsploit
+    template_id     TEXT,              -- id del template nuclei / nombre script nse
+    cve_id          TEXT,
+    title           TEXT NOT NULL,
+    description     TEXT,
+    severity        severity_level NOT NULL,
+    cvss_score      NUMERIC(3,1),
+    reference_url   TEXT,
+    raw_output_path TEXT,              -- ruta en storage al output crudo
+    status          finding_status NOT NULL DEFAULT 'open',
+    discovered_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    resolved_at     TIMESTAMPTZ,
+    UNIQUE (service_id, source, template_id, cve_id)
+);
+
+-- ---------------------------------------------------------------------
+-- Trazabilidad de escaneos (jobs asíncronos)
+-- ---------------------------------------------------------------------
+CREATE TYPE job_type AS ENUM ('scan_domain', 'scan_services', 'scan_vulnerabilities', 'full_scan');
+CREATE TYPE job_status AS ENUM ('pending', 'running', 'completed', 'failed', 'cancelled');
+
+CREATE TABLE scan_jobs (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    client_id       UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    type            job_type NOT NULL,
+    target_type     TEXT NOT NULL,   -- domain | subdomain | service
+    target_id       UUID NOT NULL,
+    status          job_status NOT NULL DEFAULT 'pending',
+    requested_by    UUID REFERENCES users(id),
+    celery_task_id  TEXT,
+    started_at      TIMESTAMPTZ,
+    finished_at     TIMESTAMPTZ,
+    error_message   TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE scan_job_tasks (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    scan_job_id     UUID NOT NULL REFERENCES scan_jobs(id) ON DELETE CASCADE,
+    worker_type     TEXT NOT NULL,   -- recon | portscan | service | vuln
+    target          TEXT NOT NULL,
+    status          job_status NOT NULL DEFAULT 'pending',
+    started_at      TIMESTAMPTZ,
+    finished_at     TIMESTAMPTZ,
+    output_ref      TEXT,
+    error_message   TEXT
+);
+
+CREATE TABLE audit_log (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id         UUID REFERENCES users(id),
+    action          TEXT NOT NULL,
+    entity_type     TEXT NOT NULL,
+    entity_id       UUID,
+    client_id       UUID,
+    metadata        JSONB,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- =====================================================================
+-- Row-Level Security (segunda capa de aislamiento multi-tenant)
+-- La app setea, por conexión/transacción, vía set_config() (NO la sentencia
+-- SET, que no admite parámetros bindeados y además choca con "current_role"
+-- por ser palabra reservada en Postgres):
+--   SELECT set_config('app.current_role', '<role>', false);
+--   SELECT set_config('app.current_client_ids', '<uuid1>,<uuid2>,...', false);  (vacío si admin/viewer_all)
+-- =====================================================================
+
+CREATE OR REPLACE FUNCTION current_client_ids() RETURNS UUID[] AS $$
+    SELECT CASE
+        WHEN current_setting('app.current_client_ids', true) IS NULL
+             OR current_setting('app.current_client_ids', true) = ''
+        THEN ARRAY[]::UUID[]
+        ELSE string_to_array(current_setting('app.current_client_ids', true), ',')::UUID[]
+    END;
+$$ LANGUAGE sql STABLE;
+
+CREATE OR REPLACE FUNCTION current_role_is_global() RETURNS BOOLEAN AS $$
+    SELECT current_setting('app.current_role', true) IN ('admin', 'viewer_all');
+$$ LANGUAGE sql STABLE;
+
+DO $$
+DECLARE
+    t TEXT;
+BEGIN
+    FOR t IN SELECT unnest(ARRAY['clients','domains','subdomains','hosts','services','vulnerabilities','scan_jobs'])
+    LOOP
+        EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
+    END LOOP;
+END $$;
+
+-- clients: la columna relevante es "id"
+CREATE POLICY client_isolation ON clients
+    USING (current_role_is_global() OR id = ANY (current_client_ids()));
+
+-- el resto de tablas tienen columna client_id directa
+CREATE POLICY domain_isolation ON domains
+    USING (current_role_is_global() OR client_id = ANY (current_client_ids()));
+CREATE POLICY subdomain_isolation ON subdomains
+    USING (current_role_is_global() OR client_id = ANY (current_client_ids()));
+CREATE POLICY host_isolation ON hosts
+    USING (current_role_is_global() OR client_id = ANY (current_client_ids()));
+CREATE POLICY service_isolation ON services
+    USING (current_role_is_global() OR client_id = ANY (current_client_ids()));
+CREATE POLICY vuln_isolation ON vulnerabilities
+    USING (current_role_is_global() OR client_id = ANY (current_client_ids()));
+CREATE POLICY scanjob_isolation ON scan_jobs
+    USING (current_role_is_global() OR client_id = ANY (current_client_ids()));
+
+-- Índices para las consultas más comunes del dashboard
+CREATE INDEX idx_subdomains_domain ON subdomains(domain_id);
+CREATE INDEX idx_hosts_subdomain ON hosts(subdomain_id);
+CREATE INDEX idx_services_host ON services(host_id);
+CREATE INDEX idx_vulns_service ON vulnerabilities(service_id);
+CREATE INDEX idx_vulns_severity ON vulnerabilities(client_id, severity);
+CREATE INDEX idx_vulns_status ON vulnerabilities(client_id, status);
+CREATE INDEX idx_scanjobs_client ON scan_jobs(client_id, status);
+
+-- ---------------------------------------------------------------------
+-- El usuario admin inicial YA NO se crea acá. Se crea/actualiza
+-- automáticamente al arrancar el contenedor "api" (ver app/bootstrap.py),
+-- usando las variables de entorno ADMIN_EMAIL y ADMIN_PASSWORD definidas
+-- en .env — así se evita tener que generar y pegar un hash Argon2 a mano.
+-- ---------------------------------------------------------------------

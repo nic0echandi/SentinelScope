@@ -1,0 +1,92 @@
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: asm
+      POSTGRES_PASSWORD: asm
+      POSTGRES_DB: asm
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "15432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U asm"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "16379:6379"
+
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg2://asm:asm@postgres:5432/asm
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-prod}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@localhost}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-ChangeMe123!}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    ports:
+      - "18000:8000"
+
+  worker:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg2://asm:asm@postgres:5432/asm
+      REDIS_URL: redis://redis:6379/0
+      MAX_CONCURRENT_TARGETS: "5"
+      NMAP_TIMING: ${NMAP_TIMING:-T3}
+      NMAP_TIMING_WAF: ${NMAP_TIMING_WAF:-T2}
+      NMAP_USE_DECOYS: ${NMAP_USE_DECOYS:-false}
+      NAABU_RATE: ${NAABU_RATE:-1000}
+      NAABU_RATE_WAF: ${NAABU_RATE_WAF:-150}
+      NUCLEI_RATE_LIMIT: ${NUCLEI_RATE_LIMIT:-150}
+      NUCLEI_RATE_LIMIT_WAF: ${NUCLEI_RATE_LIMIT_WAF:-20}
+      NUCLEI_RETRIES: ${NUCLEI_RETRIES:-1}
+      NUCLEI_RETRIES_WAF: ${NUCLEI_RETRIES_WAF:-3}
+      RANDOM_USER_AGENT: ${RANDOM_USER_AGENT:-true}
+      WAF_DETECTION_ENABLED: ${WAF_DETECTION_ENABLED:-true}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - scan-output:/data/scan-output
+    # naabu y algunos scripts nmap necesitan raw sockets
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    # Escala horizontal: docker compose up --scale worker=3
+    deploy:
+      replicas: 1
+
+  frontend:
+    image: nginx:alpine
+    restart: unless-stopped
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+    ports:
+      - "18080:80"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  scan-output:
