@@ -120,4 +120,21 @@ RUN set -e; \
     done; \
     echo "Todas las herramientas verificadas OK: subfinder amass assetfinder shuffledns massdns dnsx httpx naabu nuclei nmap searchsploit wafw00f"
 
-CMD ["celery", "-A", "app.celery_app.celery_app", "worker", "--loglevel=INFO", "--concurrency=4"]
+# GODEBUG=cpu.avx2=off: workaround para un bug conocido de bytedance/sonic
+# (librería JSON usada por nuclei) que puede crashear con SIGILL en CPUs
+# virtualizados donde el hypervisor reporta soporte AVX2 pero no lo
+# implementa correctamente. Esto le dice al runtime de Go que trate AVX2
+# como no disponible; todas las libs (incluida sonic) caen a un camino
+# sin SIMD -- un poco más lento, pero no crashea.
+ENV GODEBUG=cpu.avx2=off
+
+# Concurrencia del worker de Celery, configurable vía env var. OJO: el
+# ancho de banda/CPU consumido es aproximadamente
+# CELERY_CONCURRENCY x MAX_CONCURRENT_TARGETS (este último controla el
+# paralelismo interno de cada full-scan, ver api/app/config.py), así que
+# hay que ajustar ambos juntos si el escaneo satura la red del cliente.
+ENV CELERY_CONCURRENCY=2
+
+# CMD en forma shell (no exec form) para que la variable de entorno se
+# expanda correctamente al arrancar el contenedor.
+CMD celery -A app.celery_app.celery_app worker --loglevel=INFO --concurrency=${CELERY_CONCURRENCY}

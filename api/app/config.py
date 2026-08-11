@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
     storage_dir: str = os.getenv("STORAGE_DIR", "/data/scan-output")
-    max_concurrent_targets_per_job: int = int(os.getenv("MAX_CONCURRENT_TARGETS", "5"))
+    max_concurrent_targets_per_job: int = int(os.getenv("MAX_CONCURRENT_TARGETS", "2"))
 
     # Usuario admin inicial, creado/actualizado automáticamente al arrancar
     # la API (ver app/bootstrap.py). Evita tener que generar y pegar un

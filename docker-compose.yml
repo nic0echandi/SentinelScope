@@ -1,3 +1,5 @@
+name: sentinelscope
+
 services:
   postgres:
     image: postgres:16
@@ -50,7 +52,8 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg2://asm:asm@postgres:5432/asm
       REDIS_URL: redis://redis:6379/0
-      MAX_CONCURRENT_TARGETS: "5"
+      MAX_CONCURRENT_TARGETS: ${MAX_CONCURRENT_TARGETS:-2}
+      CELERY_CONCURRENCY: ${CELERY_CONCURRENCY:-2}
       NMAP_TIMING: ${NMAP_TIMING:-T3}
       NMAP_TIMING_WAF: ${NMAP_TIMING_WAF:-T2}
       NMAP_USE_DECOYS: ${NMAP_USE_DECOYS:-false}

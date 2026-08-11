@@ -74,29 +74,64 @@ def nuclei_scan(target: str, tags: list[str] | None = None, waf_mode: bool = Fal
 def nmap_vuln_scripts(ip: str, port: int, waf_mode: bool = False) -> list[dict]:
     xml_out = "/tmp/nmap_vuln_output.xml"
     timing = settings.nmap_timing_waf if waf_mode else settings.nmap_timing
-    rc, out, err = run(
-        ["nmap", "-Pn", f"-{timing}", "-p", str(port), "--script", "vuln", "-oX", xml_out, ip],
-        timeout=1200,
-    )
+    # -sV es necesario acá por dos motivos:
+    #  1. Muchos scripts NSE de la categoría http-* (http-csrf, http-enum,
+    #     http-sql-injection, etc.) solo se activan si nmap reconoció el
+    #     puerto como servicio "http" -- eso lo hace la detección de
+    #     versión (-sV), no el escaneo de puertos solo.
+    #  2. vulners.nse necesita el CPE del producto (que también sale de
+    #     -sV) para poder buscar CVEs asociados; sin -sV corre vacío.
+    # Sin -sV acá, la enorme mayoría de los scripts NSE de "vuln" para
+    # servicios HTTP directamente no se ejecutaban -- coincide con el
+    # síntoma de "por consola encuentra un montón, la app no encuentra nada".
+    cmd = ["nmap", "-sV", "-Pn", f"-{timing}", "-p", str(port),
+           "--script", "vuln,vulners", "-oX", xml_out, ip]
+    rc, out, err = run(cmd, timeout=1200)
     import xml.etree.ElementTree as ET
     findings = []
     try:
         tree = ET.parse(xml_out)
     except Exception:
         return findings
+
+    # Marcadores de resultado NEGATIVO explícito (el script corrió y no
+    # encontró nada) -- estos NO son hallazgos y hay que descartarlos.
+    NEGATIVE_MARKERS = (
+        "couldn't find", "not vulnerable", "no vuln", "seems to be not vulnerable",
+        "no exploitable", "no results", "0 vulnerabilities",
+    )
+
     for script in tree.getroot().iter("script"):
         script_id = script.get("id")
-        output = script.get("output", "")
-        if not output or "VULNERABLE" not in output.upper():
+        output = (script.get("output") or "").strip()
+        if not output:
             continue
+        lower = output.lower()
+        if any(marker in lower for marker in NEGATIVE_MARKERS):
+            continue
+
         cve_match = re.findall(r"CVE-\d{4}-\d{4,7}", output)
-        severity = "high" if "VULNERABLE" in output else "info"
+
+        # NOTA: antes se exigía que el output contuviera literalmente la
+        # palabra "VULNERABLE" para considerarlo un hallazgo -- eso
+        # descartaba la gran mayoría de los scripts reales (http-csrf,
+        # http-sql-injection, http-enum, http-trace, vulners, etc. jamás
+        # usan esa palabra), dejando pasar solo casos como
+        # http-slowloris-check. Ahora se captura cualquier output no-vacío
+        # que no sea un negativo explícito, y la severidad se infiere:
+        if "vulnerable" in lower:
+            severity = "high"
+        elif script_id == "vulners" and cve_match:
+            severity = "high"  # vulners casi siempre lista CVEs reales del CPE detectado
+        else:
+            severity = "medium"
+
         findings.append({
             "source": "nmap_nse",
             "template_id": script_id,
             "cve_id": ",".join(sorted(set(cve_match))) or None,
-            "title": f"NSE {script_id}: posible vulnerabilidad detectada",
-            "description": output.strip()[:2000],
+            "title": f"NSE {script_id}: hallazgo detectado",
+            "description": output[:2000],
             "severity": severity,
             "cvss_score": None,
             "reference_url": None,
