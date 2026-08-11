@@ -8,9 +8,15 @@ services:
       POSTGRES_USER: asm
       POSTGRES_PASSWORD: asm
       POSTGRES_DB: asm
+      # Contraseña del rol de aplicación sin privilegios de superusuario
+      # (ver db/init.sql.template). La API/worker se conectan con ESE rol,
+      # no con POSTGRES_USER, para que RLS se aplique de verdad -- Postgres
+      # ignora RLS incondicionalmente para superusuarios.
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Definí APP_DB_PASSWORD en tu .env}
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./db/00-init.sh:/docker-entrypoint-initdb.d/00-init.sh:ro
+      - ./db/init.sql.template:/docker-entrypoint-initdb.d/init.sql.template:ro
     ports:
       - "15432:5432"
     healthcheck:
@@ -31,7 +37,11 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql+psycopg2://asm:asm@postgres:5432/asm
+      DATABASE_URL: postgresql+psycopg2://sentinelscope_app:${APP_DB_PASSWORD:?Definí APP_DB_PASSWORD en tu .env}@postgres:5432/asm
+      # Conexión con privilegios de superusuario, exclusiva para migraciones
+      # de esquema al arrancar (ver app/migrations.py). Solo la necesita
+      # "api" (donde corre el evento de startup); "worker" no.
+      ADMIN_DATABASE_URL: postgresql+psycopg2://asm:asm@postgres:5432/asm
       REDIS_URL: redis://redis:6379/0
       JWT_SECRET: ${JWT_SECRET:-change-me-in-prod}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@localhost}
@@ -50,7 +60,7 @@ services:
       dockerfile: worker/Dockerfile
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql+psycopg2://asm:asm@postgres:5432/asm
+      DATABASE_URL: postgresql+psycopg2://sentinelscope_app:${APP_DB_PASSWORD:?Definí APP_DB_PASSWORD en tu .env}@postgres:5432/asm
       REDIS_URL: redis://redis:6379/0
       MAX_CONCURRENT_TARGETS: ${MAX_CONCURRENT_TARGETS:-2}
       CELERY_CONCURRENCY: ${CELERY_CONCURRENCY:-2}

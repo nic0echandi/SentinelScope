@@ -7,6 +7,19 @@ from .config import settings
 engine = create_engine(settings.database_url, pool_pre_ping=True, pool_size=10, max_overflow=20)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
+# Conexión separada, con privilegios de superusuario/dueño de las tablas,
+# usada EXCLUSIVAMENTE por el sistema de migraciones (app/migrations.py)
+# para DDL (ALTER TABLE, CREATE POLICY, etc.) -- el rol de la conexión de
+# arriba (settings.database_url) es un rol restringido sin esos permisos
+# a propósito, para que RLS se aplique de verdad. Si no se define
+# ADMIN_DATABASE_URL, cae en el mismo valor que database_url (compatibilidad
+# con configuraciones que todavía no separaron los roles).
+admin_engine = create_engine(
+    settings.admin_database_url or settings.database_url,
+    pool_pre_ping=True, pool_size=2, max_overflow=2,
+)
+AdminSessionLocal = sessionmaker(bind=admin_engine, autoflush=False, autocommit=False)
+
 
 def get_raw_session() -> Session:
     return SessionLocal()

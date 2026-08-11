@@ -208,6 +208,7 @@ const ICONS = {
   domain: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></svg>`,
   vuln: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 3 6v6c0 5 4 8.5 9 10 5-1.5 9-5 9-10V6l-9-4Z"/><path d="M12 8v5M12 16h.01"/></svg>`,
   account: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>`,
+  activity: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>`,
   plus: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>`,
   edit: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>`,
   trash: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>`,
@@ -286,11 +287,13 @@ const NAV_ITEMS = [
   {id:"clientes", label:"Clientes", icon:"clients"},
   {id:"dominios", label:"Dominios", icon:"domain"},
   {id:"vulnerabilidades", label:"Vulnerabilidades", icon:"vuln"},
+  {id:"actividad", label:"Actividad", icon:"activity", roles:["admin","client_admin"]},
   {id:"cuenta", label:"Mi cuenta", icon:"account"},
 ];
 
 function renderSidebar() {
-  document.getElementById("sidenav").innerHTML = NAV_ITEMS.map(item => `
+  const items = NAV_ITEMS.filter(item => !item.roles || item.roles.includes(me.role));
+  document.getElementById("sidenav").innerHTML = items.map(item => `
     <a href="#" class="${item.id===currentPage?'active':''}" onclick="goTo('${item.id}');return false;">
       ${ICONS[item.icon]} ${item.label}
     </a>`).join("");
@@ -310,7 +313,7 @@ function goTo(page) {
   renderSidebar();
   const renderers = {
     dashboard: renderDashboard, clientes: renderClientes, dominios: renderDominios,
-    vulnerabilidades: renderVulnerabilidades, cuenta: renderCuenta,
+    vulnerabilidades: renderVulnerabilidades, actividad: renderActividad, cuenta: renderCuenta,
   };
   (renderers[page] || renderDominios)();
   if (page === "dominios") ensurePolling(); else stopPolling();
@@ -653,12 +656,31 @@ async function renderClientes() {
     <div class="domain-grid" id="clientGrid"><div class="empty-state">Cargando...</div></div>`;
 
   clients = await api("/clients");
-  document.getElementById("clientGrid").innerHTML = clients.length ? clients.map(c => `
-    <div class="domain-card">
+  // Para mostrar el dominio principal de cada cliente en su card, sin
+  // hacer N requests: traemos todos los dominios accesibles de una vez
+  // (RLS ya filtra por lo que el usuario puede ver) y los agrupamos por cliente.
+  let domainsByClient = {};
+  try {
+    const allDomains = await api("/domains");
+    allDomains.forEach(d => {
+      if (!domainsByClient[d.client_id]) domainsByClient[d.client_id] = d;
+    });
+  } catch (e) { /* si falla, simplemente no mostramos el dominio principal */ }
+
+  document.getElementById("clientGrid").innerHTML = clients.length ? clients.map(c => {
+    const mainDomain = domainsByClient[c.id];
+    return `
+    <div class="domain-card" style="cursor:pointer" onclick="selectClientAndGoToDomains('${c.id}')">
       <div class="domain-title">${ICONS.clients} ${c.name}</div>
-      <div class="domain-desc">${c.description || "Sin descripción"}</div>
+      ${mainDomain ? `<div class="domain-sub">${mainDomain.name}</div>` : `<div class="domain-desc">${c.description || "Sin dominio principal cargado"}</div>`}
       <span class="status-badge ${c.active?'scanned':'error'}">${c.active?'activo':'inactivo'}</span>
-    </div>`).join("") : `<div class="empty-state">No hay clientes cargados.</div>`;
+    </div>`;
+  }).join("") : `<div class="empty-state">No hay clientes cargados.</div>`;
+}
+
+function selectClientAndGoToDomains(clientId) {
+  selectedClientId = clientId;
+  goTo("dominios");
 }
 
 function openNewClientModal() {
@@ -667,7 +689,9 @@ function openNewClientModal() {
     <label>Nombre</label>
     <input id="ncName" placeholder="Acme Corp">
     <label>Descripción (opcional)</label>
-    <input id="ncDesc" placeholder="Dominio principal del cliente">
+    <input id="ncDesc" placeholder="Breve descripción del cliente">
+    <label>Dominio principal (opcional)</label>
+    <input id="ncDomain" placeholder="ejemplo.com">
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-primary" onclick="submitNewClient()">Crear</button>
@@ -676,11 +700,22 @@ function openNewClientModal() {
 async function submitNewClient() {
   const name = document.getElementById("ncName").value.trim();
   const description = document.getElementById("ncDesc").value.trim() || null;
+  const domainName = document.getElementById("ncDomain").value.trim();
   if (!name) { toast("El nombre es obligatorio.", true); return; }
   try {
-    await api("/clients", {method:"POST", body: JSON.stringify({name, description})});
+    const client = await api("/clients", {method:"POST", body: JSON.stringify({name, description})});
+    if (domainName) {
+      try {
+        await api("/domains", {method:"POST", body: JSON.stringify({client_id: client.id, name: domainName})});
+      } catch (e) {
+        toast(`Cliente creado, pero falló la carga del dominio: ${e.message}`, true);
+      }
+    }
     closeModal();
-    goTo("clientes");
+    clients = await api("/clients");
+    // Nos vamos directo a Dominios con el cliente recién creado ya
+    // seleccionado, listo para cargar más dominios o lanzar escaneos.
+    selectClientAndGoToDomains(client.id);
   } catch (e) { toast(e.message, true); }
 }
 
@@ -741,6 +776,66 @@ async function renderVulnerabilidades() {
 async function updateVulnStatus(id, status) {
   try { await api(`/services/vulnerabilities/${id}`, {method:"PATCH", body: JSON.stringify({status})}); }
   catch (e) { toast(e.message, true); }
+}
+
+// ============================== ACTIVIDAD (audit log) ==============================
+const ACTION_LABELS = {
+  login: "Inicio de sesión", login_failed: "Login fallido", change_password: "Cambio de contraseña",
+  create: "Creó", update: "Actualizó", delete: "Eliminó", grant_access: "Otorgó acceso",
+  update_status: "Cambió estado", trigger_scan_domain: "Lanzó Scan domain",
+  trigger_full_scan: "Lanzó Full scan", trigger_scan_services: "Lanzó Scan services",
+  trigger_scan_vulnerabilities: "Lanzó Scan vulnerabilities",
+};
+const ENTITY_LABELS = {
+  user: "usuario", client: "cliente", domain: "dominio", subdomain: "subdominio",
+  service: "servicio", vulnerability: "vulnerabilidad", user_client_access: "acceso de usuario",
+};
+
+async function renderActividad() {
+  const content = document.getElementById("pageContent");
+  content.innerHTML = `
+    <div class="page-header">
+      <div><h1>Actividad</h1><p>Registro de operaciones de escaneo/detección de vulnerabilidades y de la aplicación web.</p></div>
+      ${clientSelectorHtml()}
+    </div>
+    <div class="panel">
+      <div class="filters-row">
+        <select id="actionFilter" onchange="renderActividad()">
+          <option value="">Todas las acciones</option>
+          ${Object.keys(ACTION_LABELS).map(a => `<option value="${a}">${ACTION_LABELS[a]}</option>`).join("")}
+        </select>
+        <select id="entityFilter" onchange="renderActividad()">
+          <option value="">Todas las entidades</option>
+          ${Object.keys(ENTITY_LABELS).map(e => `<option value="${e}">${ENTITY_LABELS[e]}</option>`).join("")}
+        </select>
+      </div>
+      <table>
+        <thead><tr><th>Fecha</th><th>Usuario</th><th>Acción</th><th>Entidad</th><th>Cliente</th><th>Detalle</th></tr></thead>
+        <tbody id="auditBody"><tr><td colspan="6" class="empty-state">Cargando...</td></tr></tbody>
+      </table>
+    </div>`;
+
+  const actionF = document.getElementById("actionFilter")?.value || "";
+  const entityF = document.getElementById("entityFilter")?.value || "";
+  let url = "/audit-log?limit=150&";
+  if (selectedClientId !== "all") url += `client_id=${selectedClientId}&`;
+  if (actionF) url += `action=${actionF}&`;
+  if (entityF) url += `entity_type=${entityF}&`;
+
+  try {
+    const logs = await api(url);
+    document.getElementById("auditBody").innerHTML = logs.length ? logs.map(l => `
+      <tr>
+        <td style="color:var(--muted);font-size:12px">${new Date(l.created_at).toLocaleString()}</td>
+        <td>${l.user_full_name || l.user_email || "—"}</td>
+        <td>${ACTION_LABELS[l.action] || l.action}</td>
+        <td>${ENTITY_LABELS[l.entity_type] || l.entity_type}</td>
+        <td>${l.client_name || "—"}</td>
+        <td style="color:var(--muted);font-size:12px;font-family:ui-monospace,monospace">${l.metadata ? JSON.stringify(l.metadata) : ""}</td>
+      </tr>`).join("") : `<tr><td colspan="6" class="empty-state">Sin actividad registrada con estos filtros.</td></tr>`;
+  } catch (e) {
+    document.getElementById("auditBody").innerHTML = `<tr><td colspan="6" class="empty-state">Error: ${e.message}</td></tr>`;
+  }
 }
 
 // ============================== DASHBOARD ==============================

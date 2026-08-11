@@ -1,8 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routers import auth, users, clients, domains, subdomains, services, scans, vulnerabilities
+from .routers import auth, users, clients, domains, subdomains, services, scans, vulnerabilities, audit
 from .bootstrap import ensure_admin_user
+from .migrations import run_migrations
 
 app = FastAPI(title="SentinelScope API", version="1.0.0")
 
@@ -22,10 +23,12 @@ app.include_router(subdomains.router)
 app.include_router(services.router)
 app.include_router(scans.router)
 app.include_router(vulnerabilities.router)
+app.include_router(audit.router)
 
 
 @app.on_event("startup")
 def on_startup():
+    run_migrations()
     ensure_admin_user()
 
 

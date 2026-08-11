@@ -7,6 +7,15 @@ class Settings(BaseSettings):
         "DATABASE_URL",
         "postgresql+psycopg2://asm:asm@postgres:5432/asm",
     )
+    # Conexión con privilegios elevados, usada EXCLUSIVAMENTE por las
+    # migraciones de esquema (crear tablas, políticas RLS, roles). El resto
+    # de la app (database_url de arriba) corre con un rol limitado, sin
+    # privilegios de superusuario ni de owner de las tablas -- necesario
+    # para que Postgres realmente aplique las políticas RLS (superusers y
+    # table owners las ignoran automáticamente, sin importar FORCE ROW
+    # LEVEL SECURITY). Si no se define, cae en el mismo valor que
+    # DATABASE_URL (comportamiento previo, sin el rol separado).
+    admin_database_url: str = os.getenv("ADMIN_DATABASE_URL", "")
     redis_url: str = os.getenv("REDIS_URL", "redis://redis:6379/0")
     jwt_secret: str = os.getenv("JWT_SECRET", "change-me-in-prod")
     jwt_algorithm: str = "HS256"

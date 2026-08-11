@@ -68,6 +68,7 @@ def scan_vulnerabilities(service_id: uuid.UUID, db: Session = Depends(get_db),
         {"id": job_id, "c": client_id, "t": service_id, "by": user.id},
     )
     db.execute(text("UPDATE services SET status = 'queued' WHERE id = :id"), {"id": service_id})
+    log_action(db, user, "trigger_scan_vulnerabilities", "service", service_id, client_id, {"scan_job_id": str(job_id)})
     db.commit()
     task = run_scan_vulnerabilities.delay(str(job_id), str(client_id), str(service_id))
     db.execute(text("UPDATE scan_jobs SET celery_task_id = :t WHERE id = :id"), {"t": task.id, "id": job_id})

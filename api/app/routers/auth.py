@@ -1,3 +1,4 @@
+import json
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -29,12 +30,26 @@ def login(payload: LoginRequest):
             {"email": payload.email},
         ).fetchone()
         if not row or not row.active or not verify_password(payload.password, row.password_hash):
+            # Intento fallido: se registra sin user_id (no sabemos si el
+            # email existe) pero con el email en metadata, para poder
+            # detectar patrones de fuerza bruta desde el panel de auditoría.
+            db.execute(
+                text("""INSERT INTO audit_log (action, entity_type, metadata)
+                         VALUES ('login_failed', 'user', :meta)"""),
+                {"meta": json.dumps({"email": payload.email})},
+            )
+            db.commit()
             raise HTTPException(status_code=401, detail="Credenciales inválidas")
 
         client_ids = _client_access_for(db, str(row.id), row.role)
         access = create_access_token(str(row.id), row.role, client_ids)
         refresh = create_refresh_token(str(row.id))
         db.execute(text("UPDATE users SET last_login_at = now() WHERE id = :id"), {"id": row.id})
+        db.execute(
+            text("""INSERT INTO audit_log (user_id, action, entity_type, entity_id)
+                     VALUES (:uid, 'login', 'user', :uid)"""),
+            {"uid": row.id},
+        )
         db.commit()
         return TokenResponse(access_token=access, refresh_token=refresh,
                               must_change_password=row.must_change_password)
@@ -79,6 +94,11 @@ def change_password(payload: ChangePasswordRequest, user: CurrentUser = Depends(
         db.execute(
             text("UPDATE users SET password_hash = :h, must_change_password = FALSE WHERE id = :id"),
             {"h": new_hash, "id": user.id},
+        )
+        db.execute(
+            text("""INSERT INTO audit_log (user_id, action, entity_type, entity_id)
+                     VALUES (:uid, 'change_password', 'user', :uid)"""),
+            {"uid": user.id},
         )
         db.commit()
         return {"detail": "Contraseña actualizada correctamente"}

@@ -8,7 +8,8 @@ aislamiento multi-tenant, RBAC y dashboard tipo "Nuclei Results".
 
 ```
 sentinelscope/
-  db/init.sql              # Esquema Postgres + Row-Level Security
+  db/init.sql.template     # Esquema Postgres + Row-Level Security + rol de app
+  db/00-init.sh            # Bootstrap: inyecta APP_DB_PASSWORD de forma segura
   api/                     # API FastAPI + tareas Celery (lógica de negocio)
     Dockerfile              # Imagen liviana, sin herramientas de escaneo
     requirements.txt
@@ -105,8 +106,20 @@ momento te quedás afuera (perdiste la contraseña), simplemente cambiá
 
 El aislamiento entre clientes se refuerza en dos capas: filtrado por
 `client_id` en cada endpoint + **Row-Level Security en Postgres**
-(`db/init.sql`), que impide leer filas de un cliente no autorizado
-aunque hubiera un bug en la capa de aplicación.
+(`db/init.sql.template`), que impide leer filas de un cliente no
+autorizado aunque hubiera un bug en la capa de aplicación.
+
+**Importante**: la API y el worker se conectan a Postgres con un rol
+llamado `sentinelscope_app`, creado automáticamente al bootstrapear la
+base (`db/init.sql.template` + `db/00-init.sh`), **sin privilegios de
+superusuario**. Esto es necesario porque Postgres ignora las políticas de
+RLS de forma incondicional para superusuarios y para el dueño de las
+tablas (salvo `FORCE ROW LEVEL SECURITY`, que igual no aplica a
+superusuarios) — si la app se conectara con el rol de `POSTGRES_USER`
+(que sí es superusuario), todo el aislamiento por RLS sería un no-op en
+la práctica. El rol de `POSTGRES_USER` (dueño de las tablas) se sigue
+usando, pero solo para el bootstrap inicial y para las migraciones de
+esquema (`ADMIN_DATABASE_URL`, ver `.env.example`).
 
 ## Escalar workers
 
@@ -116,6 +129,16 @@ docker compose up -d --scale worker=3
 
 Cada worker consume tareas de la misma cola Redis/Celery, permitiendo
 paralelizar escaneos entre varios clientes sin tocar código.
+
+## Migraciones de esquema
+
+Los cambios de esquema posteriores a la primera versión se aplican como
+migraciones idempotentes (`api/app/migrations.py`), automáticamente al
+arrancar la API — no hace falta resetear la base de datos
+(`docker compose down -v`) para aplicarlas. Corren con el rol de
+`ADMIN_DATABASE_URL` (privilegios elevados), ya que operaciones como
+`ALTER TABLE` o `CREATE POLICY` requieren ser dueño de la tabla o
+superusuario.
 
 ## Notas importantes
 

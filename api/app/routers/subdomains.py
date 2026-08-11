@@ -113,6 +113,7 @@ def scan_services(domain_id: uuid.UUID, subdomain_id: uuid.UUID, db: Session = D
         {"id": job_id, "c": client_id, "t": subdomain_id, "by": user.id},
     )
     db.execute(text("UPDATE subdomains SET status = 'queued' WHERE id = :id"), {"id": subdomain_id})
+    log_action(db, user, "trigger_scan_services", "subdomain", subdomain_id, client_id, {"scan_job_id": str(job_id)})
     db.commit()
     task = run_scan_services.delay(str(job_id), str(client_id), str(subdomain_id))
     db.execute(text("UPDATE scan_jobs SET celery_task_id = :t WHERE id = :id"), {"t": task.id, "id": job_id})

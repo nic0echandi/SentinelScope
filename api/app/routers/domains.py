@@ -62,6 +62,7 @@ def scan_domain(client_id: uuid.UUID, domain_id: uuid.UUID, db: Session = Depend
         {"id": job_id, "c": client_id, "t": domain_id, "by": user.id},
     )
     db.execute(text("UPDATE domains SET status = 'queued' WHERE id = :id"), {"id": domain_id})
+    log_action(db, user, "trigger_scan_domain", "domain", domain_id, client_id, {"scan_job_id": str(job_id)})
     db.commit()
     task = run_scan_domain.delay(str(job_id), str(client_id), str(domain_id))
     db.execute(text("UPDATE scan_jobs SET celery_task_id = :t WHERE id = :id"), {"t": task.id, "id": job_id})
@@ -79,6 +80,7 @@ def full_scan(client_id: uuid.UUID, domain_id: uuid.UUID, db: Session = Depends(
         {"id": job_id, "c": client_id, "t": domain_id, "by": user.id},
     )
     db.execute(text("UPDATE domains SET status = 'queued' WHERE id = :id"), {"id": domain_id})
+    log_action(db, user, "trigger_full_scan", "domain", domain_id, client_id, {"scan_job_id": str(job_id)})
     db.commit()
     task = run_full_scan.delay(str(job_id), str(client_id), str(domain_id))
     db.execute(text("UPDATE scan_jobs SET celery_task_id = :t WHERE id = :id"), {"t": task.id, "id": job_id})
