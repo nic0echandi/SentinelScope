@@ -679,11 +679,22 @@ async function deleteDomain(domainId, clientId) {
   } catch (e) { toast(e.message, true); }
 }
 
+async function autoOpenSubdomainsPanel(domainId) {
+  const subsEl = document.getElementById(`subs-${domainId}`);
+  if (subsEl && subsEl.classList.contains("hidden")) {
+    subsEl.classList.remove("hidden");
+    await loadSubdomainsPanel(domainId, false);
+  }
+}
+
 async function scanDomain(domainId, clientId) {
   try {
     await api(`/clients/${clientId}/domains/${domainId}/scan`, {method:"POST"});
     toast("Escaneo de dominio encolado.");
     optimisticMarkQueued("domain", domainId);
+    // Igual que Full scan: abrimos el panel de subdominios solo, para ver
+    // en vivo cómo van apareciendo a medida que el recon los descubre.
+    await autoOpenSubdomainsPanel(domainId);
     ensurePolling();
   } catch (e) { toast(e.message, true); }
 }
@@ -695,11 +706,7 @@ async function fullScan(domainId, clientId) {
     // Abrimos el panel de subdominios automáticamente para que el usuario
     // vea el progreso en vivo (subdominios/servicios/vulnerabilidades
     // apareciendo) sin tener que acordarse de hacer clic en "Ver subdominios".
-    const subsEl = document.getElementById(`subs-${domainId}`);
-    if (subsEl && subsEl.classList.contains("hidden")) {
-      subsEl.classList.remove("hidden");
-      await loadSubdomainsPanel(domainId, false);
-    }
+    await autoOpenSubdomainsPanel(domainId);
     ensurePolling();
   } catch (e) { toast(e.message, true); }
 }
