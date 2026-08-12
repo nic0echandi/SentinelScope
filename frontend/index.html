@@ -97,6 +97,26 @@ select, .btn{background:var(--panel2);color:var(--text);border:1px solid var(--b
   animation:spin .7s linear infinite;flex-shrink:0}
 @keyframes spin{to{transform:rotate(360deg)}}
 
+@keyframes flashIn{
+  0%{opacity:0;transform:translateY(-6px);background:rgba(45,217,185,.12)}
+  60%{opacity:1;transform:translateY(0);background:rgba(45,217,185,.12)}
+  100%{background:transparent}
+}
+.flash-in{animation:flashIn 1.6s ease-out}
+
+@keyframes pulseGlow{
+  0%,100%{box-shadow:0 0 0 0 rgba(250,204,21,0)}
+  50%{box-shadow:0 0 0 3px rgba(250,204,21,.18)}
+}
+.card-scanning{animation:pulseGlow 2s ease-in-out infinite;border-color:rgba(250,204,21,.35) !important}
+
+@keyframes countBump{
+  0%{transform:scale(1)}
+  30%{transform:scale(1.35)}
+  100%{transform:scale(1)}
+}
+.count-bump{display:inline-block;animation:countBump .5s ease-out}
+
 #toastStack{position:fixed;top:18px;right:18px;z-index:100;display:flex;flex-direction:column;gap:8px}
 .toast{background:var(--panel2);border:1px solid var(--border);border-left:3px solid var(--accent);
   border-radius:8px;padding:10px 14px;font-size:13px;box-shadow:0 4px 16px rgba(0,0,0,.4);min-width:220px;
@@ -321,7 +341,7 @@ function goTo(page) {
 
 function ensurePolling() {
   if (pollTimer) return;
-  pollTimer = setInterval(livePollTick, 5000);
+  pollTimer = setInterval(livePollTick, 4000);
 }
 function stopPolling() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
@@ -338,8 +358,9 @@ async function livePollTick() {
         : `<div class="empty-state">Todavía no se lanzó ningún escaneo.</div>`;
     }
 
-    // Badges de estado + contador de subdominios: se actualizan in-place por
-    // id, para no colapsar los paneles de subdominios que el usuario haya
+    // Badges de estado + contador de subdominios + pulso visual mientras
+    // el dominio está en cola/escaneando: se actualizan in-place por id,
+    // para no colapsar los paneles de subdominios que el usuario haya
     // dejado abiertos.
     const domains = selectedClientId === "all" ? await api("/domains") : await api(`/clients/${selectedClientId}/domains`);
     const labels = {never_scanned:"sin escanear", queued:"en cola", scanning:"escaneando", scanned:"escaneado", error:"error"};
@@ -353,7 +374,27 @@ async function livePollTick() {
       }
       const subcount = document.getElementById(`subcount-${d.id}`);
       if (subcount && d.subdomain_count != null) subcount.innerText = d.subdomain_count;
+      const card = document.getElementById(`domaincard-${d.id}`);
+      if (card) card.classList.toggle("card-scanning", d.status === "queued" || d.status === "scanning");
     });
+
+    // Paneles de subdominios/servicios que el usuario dejó abiertos: se
+    // refrescan solos, con animación para los ítems recién descubiertos --
+    // esto es lo que hace que se "vea" el full-scan avanzando en vivo.
+    const openSubPanels = document.querySelectorAll('[id^="subs-"]:not(.hidden)');
+    const subRefreshes = Array.from(openSubPanels).map(el => {
+      const domainId = el.id.replace("subs-", "");
+      return loadSubdomainsPanel(domainId, true);
+    });
+
+    const openSvcPanels = document.querySelectorAll('[id^="svc-"]:not(.hidden)');
+    const svcRefreshes = Array.from(openSvcPanels).map(el => {
+      const subId = el.id.replace("svc-", "");
+      const domainId = el.dataset.domainId;
+      return domainId ? loadServiceDetailPanel(domainId, subId, true) : Promise.resolve();
+    });
+
+    await Promise.all([...subRefreshes, ...svcRefreshes]);
   } catch (e) {
     // silencioso: un tick de polling fallido no debería interrumpir al usuario con un toast
   }
@@ -410,8 +451,9 @@ async function renderDominios() {
 
 function domainCardHtml(d) {
   const subCount = d.subdomain_count ?? "?";
+  const scanningClass = (d.status === "queued" || d.status === "scanning") ? "card-scanning" : "";
   return `
-  <div class="domain-card" data-domain-id="${d.id}">
+  <div class="domain-card ${scanningClass}" data-domain-id="${d.id}" id="domaincard-${d.id}">
     <div class="top-row">
       <div>
         <div class="domain-title">${ICONS.domain} ${d.name}</div>
@@ -496,21 +538,38 @@ async function toggleJobTasks(jobId) {
   }
 }
 
-async function toggleSubdomains(domainId) {
+// Tracking en memoria de qué IDs ya se renderizaron una vez, para poder
+// animar SOLO los ítems genuinamente nuevos que aparecen durante el
+// polling en vivo (si animáramos todo en cada refresh, parpadearía todo
+// el panel entero cada 4 segundos, que se ve mal).
+let seenSubdomainIds = {};   // domainId -> Set<subdomainId>
+let seenServiceIds = {};     // subdomainId -> Set<serviceId>
+let lastVulnTotal = {};      // subdomainId -> total de vulns visto la última vez (para el "bump")
+
+async function loadSubdomainsPanel(domainId, animate = false) {
   const el = document.getElementById(`subs-${domainId}`);
-  el.classList.toggle("hidden");
-  if (el.classList.contains("hidden") || el.dataset.loaded) return;
+  if (!el) return;
   try {
     const subs = await api(`/domains/${domainId}/subdomains`);
+    if (!seenSubdomainIds[domainId]) seenSubdomainIds[domainId] = new Set();
+    const seen = seenSubdomainIds[domainId];
     el.dataset.loaded = "1";
-    el.innerHTML = subs.length ? subs.map(s => subdomainItemHtml(domainId, s)).join("")
+    el.innerHTML = subs.length ? subs.map(s => subdomainItemHtml(domainId, s, animate && !seen.has(s.id))).join("")
       : `<div class="empty-state">Sin subdominios descubiertos aún. Probá "Scan domain".</div>`;
+    subs.forEach(s => seen.add(s.id));
   } catch (e) {
     el.innerHTML = `<div class="empty-state">Error: ${e.message}</div>`;
   }
 }
 
-function subdomainItemHtml(domainId, s) {
+async function toggleSubdomains(domainId) {
+  const el = document.getElementById(`subs-${domainId}`);
+  el.classList.toggle("hidden");
+  if (el.classList.contains("hidden") || el.dataset.loaded) return;
+  await loadSubdomainsPanel(domainId, false);
+}
+
+function subdomainItemHtml(domainId, s, isNew = false) {
   const statusClass = {scanned:"scanned", queued:"queued", scanning:"scanning", error:"error"}[s.status] || "";
 
   const ports = s.ports || [];
@@ -523,13 +582,17 @@ function subdomainItemHtml(domainId, s) {
     {color: "var(--medium)", n: s.medium}, {color: "var(--low)", n: s.low}, {color: "var(--info)", n: s.info},
   ];
   const totalVulns = sevs.reduce((a, x) => a + (x.n || 0), 0);
+  const prevTotal = lastVulnTotal[s.id];
+  const bump = (prevTotal !== undefined && totalVulns > prevTotal);
+  lastVulnTotal[s.id] = totalVulns;
+
   const dotsHtml = totalVulns > 0
-    ? `<span class="sevdots-inline">${sevs.filter(x => x.n > 0).map(x =>
+    ? `<span class="sevdots-inline ${bump ? 'count-bump' : ''}">${sevs.filter(x => x.n > 0).map(x =>
         `<span class="sev-dot"><span class="dot" style="background:${x.color}"></span>${x.n}</span>`).join("")}</span>`
     : (ports.length ? `<span style="color:var(--accent);font-size:11.5px">sin vulnerabilidades</span>` : "");
 
   return `
-  <div class="subdomain-item">
+  <div class="subdomain-item ${isNew ? 'flash-in' : ''}">
     <div class="subdomain-head">
       🔹 <b>${s.name}</b>
       <span class="status-badge ${statusClass}">${s.status}</span>
@@ -538,16 +601,17 @@ function subdomainItemHtml(domainId, s) {
       <button class="link-btn" onclick="scanServices('${domainId}','${s.id}')">Scan services</button>
       <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px" onclick="toggleServiceDetail('${domainId}','${s.id}')">Ver detalles</button>
     </div>
-    <div id="svc-${s.id}" class="hidden"></div>
+    <div id="svc-${s.id}" class="hidden" data-domain-id="${domainId}"></div>
   </div>`;
 }
 
-async function toggleServiceDetail(domainId, subId) {
+async function loadServiceDetailPanel(domainId, subId, animate = false) {
   const el = document.getElementById(`svc-${subId}`);
-  el.classList.toggle("hidden");
-  if (el.classList.contains("hidden")) return;
+  if (!el) return;
   try {
     const services = await api(`/domains/${domainId}/subdomains/${subId}/services`);
+    if (!seenServiceIds[subId]) seenServiceIds[subId] = new Set();
+    const seen = seenServiceIds[subId];
     el.innerHTML = services.length ? services.map(svc => {
       const sevs = [
         {color: "var(--critical)", n: svc.critical}, {color: "var(--high)", n: svc.high},
@@ -555,8 +619,9 @@ async function toggleServiceDetail(domainId, subId) {
       ];
       const dots = sevs.filter(x => x.n > 0).map(x =>
         `<span class="sev-dot"><span class="dot" style="background:${x.color}"></span>${x.n}</span>`).join("");
+      const isNew = animate && !seen.has(svc.id);
       return `
-      <div class="service-row" style="flex-direction:column;align-items:flex-start;border-bottom:1px solid var(--border);padding:8px 0">
+      <div class="service-row ${isNew ? 'flash-in' : ''}" style="flex-direction:column;align-items:flex-start;border-bottom:1px solid var(--border);padding:8px 0">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;width:100%">
           🔧 <b style="color:var(--text)">${svc.port}/${svc.protocol}</b> — ${svc.product || svc.service_name || "?"} ${svc.version || ""}
           ${dots || `<span style="color:var(--accent);font-size:11px">sin vulnerabilidades</span>`}
@@ -565,9 +630,17 @@ async function toggleServiceDetail(domainId, subId) {
         ${svc.banner ? `<div style="color:var(--muted2);font-size:11.5px;font-family:ui-monospace,monospace;margin-left:22px">${svc.banner}</div>` : ""}
       </div>`;
     }).join("") : `<div class="service-row">Sin servicios detectados aún.</div>`;
+    services.forEach(svc => seen.add(svc.id));
   } catch (e) {
     el.innerHTML = `<div class="service-row">Error: ${e.message}</div>`;
   }
+}
+
+async function toggleServiceDetail(domainId, subId) {
+  const el = document.getElementById(`svc-${subId}`);
+  el.classList.toggle("hidden");
+  if (el.classList.contains("hidden")) return;
+  await loadServiceDetailPanel(domainId, subId, false);
 }
 
 function openNewDomainModal() {
@@ -619,6 +692,14 @@ async function fullScan(domainId, clientId) {
     await api(`/clients/${clientId}/domains/${domainId}/full-scan`, {method:"POST"});
     toast("Full scan encolado. Puede tardar bastante según la cantidad de subdominios.");
     optimisticMarkQueued("domain", domainId);
+    // Abrimos el panel de subdominios automáticamente para que el usuario
+    // vea el progreso en vivo (subdominios/servicios/vulnerabilidades
+    // apareciendo) sin tener que acordarse de hacer clic en "Ver subdominios".
+    const subsEl = document.getElementById(`subs-${domainId}`);
+    if (subsEl && subsEl.classList.contains("hidden")) {
+      subsEl.classList.remove("hidden");
+      await loadSubdomainsPanel(domainId, false);
+    }
     ensurePolling();
   } catch (e) { toast(e.message, true); }
 }
@@ -642,6 +723,8 @@ function optimisticMarkQueued(targetType, id) {
   // para que el click se sienta inmediato.
   const badge = document.getElementById(`status-${id}`);
   if (badge) { badge.className = "status-badge queued"; badge.innerHTML = `<span class="spinner"></span> en cola`; }
+  const card = document.getElementById(`domaincard-${id}`);
+  if (card) card.classList.add("card-scanning");
 }
 
 // ============================== CLIENTES ==============================
