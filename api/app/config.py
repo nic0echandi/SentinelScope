@@ -30,6 +30,15 @@ class Settings(BaseSettings):
     admin_email: str = os.getenv("ADMIN_EMAIL", "")
     admin_password: str = os.getenv("ADMIN_PASSWORD", "")
 
+    # shuffledns: cantidad de resoluciones DNS concurrentes (flag -t).
+    # OJO: si no se pasa este flag, shuffledns usa 10000 por default -- eso
+    # satura el ancho de banda disponible en la mayoría de los links (era
+    # exactamente el problema reportado: "consume todo el ancho de banda y
+    # tumba las demás conexiones"). 500 es un valor bastante más sano,
+    # tomado de una herramienta de referencia (SuperReconn) que hace el
+    # mismo tipo de reconocimiento sin ese problema.
+    shuffledns_threads: int = int(os.getenv("SHUFFLEDNS_THREADS", "500"))
+
     # ------------------------------------------------------------------
     # Evasión de WAF/firewall: parámetros de timing y rate-limit para las
     # herramientas de escaneo. Los valores "waf_*" se usan solo cuando se

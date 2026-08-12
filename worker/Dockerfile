@@ -81,17 +81,27 @@ COPY --from=gobuild /usr/local/bin/massdns   /usr/local/bin/massdns
 #     harvesteando SSL certs de todo el espacio IPv4. Es la sugerida por
 #     ser de las de mejor relación cobertura/tamaño hoy en día (usada por
 #     defecto en reconFTW e incluida en SecLists).
-#   - resolvers.txt: lista curada de resolutores DNS públicos (trickest),
-#     necesaria para que shuffledns/dnsx resuelvan a alta velocidad sin
-#     saturar un único resolver.
+#   - resolvers.txt: a propósito es una lista CHICA de resolutores
+#     públicos grandes y confiables (Google, Cloudflare, Quad9, OpenDNS,
+#     Verisign), no una lista enorme de miles de resolutores de terceros
+#     sin verificar (como trickest/resolvers). Una lista gigante de
+#     resolutores desconocidos tiende a incluir bastantes lentos/poco
+#     confiables, lo que genera reintentos y tráfico extra. Además, así
+#     no depende de una descarga externa en el build.
 # ---------------------------------------------------------------------
 RUN mkdir -p /opt/wordlists && \
     (curl -fsSL -o /opt/wordlists/n0kovo_subdomains.txt \
       https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/DNS/n0kovo_subdomains.txt \
       || curl -fsSL -o /opt/wordlists/n0kovo_subdomains.txt \
-      https://raw.githubusercontent.com/n0kovo/n0kovo_subdomains/main/n0kovo_subdomains_tiny.txt) && \
-    curl -fsSL -o /opt/wordlists/resolvers.txt \
-      https://raw.githubusercontent.com/trickest/resolvers/main/resolvers.txt
+      https://raw.githubusercontent.com/n0kovo/n0kovo_subdomains/main/n0kovo_subdomains_tiny.txt)
+
+RUN printf '%s\n' \
+    "8.8.8.8" "8.8.4.4" \
+    "1.1.1.1" "1.0.0.1" \
+    "9.9.9.9" \
+    "208.67.222.222" "208.67.220.220" \
+    "64.6.64.6" "64.6.65.6" \
+    > /opt/wordlists/resolvers.txt
 
 # nuclei templates (se actualizan también en runtime por cron, ver README)
 RUN nuclei -update-templates -silent || true

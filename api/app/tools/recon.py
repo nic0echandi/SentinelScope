@@ -13,6 +13,7 @@ para escaneos de rutina) ya incluida en la imagen del worker
 en /opt/wordlists/n0kovo_subdomains.txt (ver worker/Dockerfile).
 """
 from .shell import run
+from ..config import settings
 
 WORDLIST_PATH = "/opt/wordlists/n0kovo_subdomains.txt"
 RESOLVERS_PATH = "/opt/wordlists/resolvers.txt"
@@ -34,10 +35,16 @@ def assetfinder_passive(domain: str) -> set[str]:
 
 
 def shuffledns_bruteforce(domain: str) -> set[str]:
-    """Bruteforce DNS activo usando shuffledns + massdns + wordlist n0kovo."""
+    """
+    Bruteforce DNS activo usando shuffledns + massdns + wordlist n0kovo.
+
+    IMPORTANTE: -t limita la cantidad de resoluciones DNS concurrentes.
+    Sin este flag, shuffledns usa 10000 por default -- eso es lo que
+    saturaba el ancho de banda disponible y tumbaba otras conexiones.
+    """
     rc, out, err = run(
         ["shuffledns", "-d", domain, "-w", WORDLIST_PATH, "-r", RESOLVERS_PATH,
-         "-silent", "-mode", "bruteforce"],
+         "-t", str(settings.shuffledns_threads), "-silent", "-mode", "bruteforce"],
         timeout=1800,  # el bruteforce activo puede tardar bastante según la wordlist
     )
     return {line.strip() for line in out.splitlines() if line.strip()}
