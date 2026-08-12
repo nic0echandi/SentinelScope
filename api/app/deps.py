@@ -1,4 +1,5 @@
 import uuid
+import json
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
@@ -70,11 +71,15 @@ def require_write_access_to_client(client_id: uuid.UUID, user: CurrentUser, db: 
 
 def log_action(db: Session, user: CurrentUser, action: str, entity_type: str,
                 entity_id=None, client_id=None, metadata=None):
+    # psycopg2 no sabe adaptar un dict de Python directo a JSON -- hay que
+    # serializarlo a texto y castear explícitamente a jsonb en el SQL,
+    # si no tira "can't adapt type 'dict'".
+    meta_json = json.dumps(metadata) if metadata is not None else None
     db.execute(
         text("""INSERT INTO audit_log (user_id, action, entity_type, entity_id, client_id, metadata)
-                 VALUES (:uid, :action, :etype, :eid, :cid, :meta)"""),
+                 VALUES (:uid, :action, :etype, :eid, :cid, CAST(:meta AS jsonb))"""),
         {"uid": user.id, "action": action, "etype": entity_type,
          "eid": str(entity_id) if entity_id else None,
          "cid": str(client_id) if client_id else None,
-         "meta": metadata},
+         "meta": meta_json},
     )
