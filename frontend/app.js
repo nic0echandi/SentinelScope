@@ -136,13 +136,11 @@ function stopPolling() {
 async function livePollTick() {
   if (currentPage !== "dominios") { stopPolling(); return; }
   try {
-    // Trabajos recientes: se puede reemplazar entero, no tiene estado expandido persistente relevante.
+    // Trabajos recientes: reconciliación in-place (ver renderJobsList),
+    // para no perder el scroll ni el detalle expandido en cada refresh.
     const jobs = selectedClientId === "all" ? await api("/scan-jobs") : await api(`/scan-jobs?client_id=${selectedClientId}`);
     const jobsList = document.getElementById("jobsList");
-    if (jobsList) {
-      jobsList.innerHTML = jobs.length ? jobs.slice(0, 10).map(jobRowHtml).join("")
-        : `<div class="empty-state">Todavía no se lanzó ningún escaneo.</div>`;
-    }
+    if (jobsList) renderJobsList(jobs, jobsList);
 
     // Badges de estado + contador de subdominios + pulso visual mientras
     // el dominio está en cola/escaneando: se actualizan in-place por id,
@@ -223,9 +221,7 @@ async function renderDominios() {
     const jobs = selectedClientId === "all"
       ? await api("/scan-jobs")
       : await api(`/scan-jobs?client_id=${selectedClientId}`);
-    document.getElementById("jobsList").innerHTML = jobs.length
-      ? jobs.slice(0,10).map(jobRowHtml).join("")
-      : `<div class="empty-state">Todavía no se lanzó ningún escaneo.</div>`;
+    renderJobsList(jobs, document.getElementById("jobsList"));
   } catch (e) {
     document.getElementById("domainGrid").innerHTML = `<div class="empty-state">Error: ${e.message}</div>`;
   }
@@ -283,24 +279,61 @@ function severityCountsHtml(j) {
     : "").join("");
 }
 
-function jobRowHtml(j) {
+function jobRowContentHtml(j) {
   const typeLabels = {scan_domain:"Scan domain", scan_services:"Scan services", scan_vulnerabilities:"Scan vulns", full_scan:"Full scan"};
   const statusClass = {completed:"scanned", running:"scanning", pending:"queued", failed:"error"}[j.status] || "";
   const statusLabel = {completed:"Completado", running:"Corriendo", pending:"En cola", failed:"Falló", cancelled:"Cancelado"}[j.status] || j.status;
   const spinner = (j.status === "running" || j.status === "pending") ? `<span class="spinner"></span>` : "";
   const when = j.created_at ? new Date(j.created_at).toLocaleString() : "";
   return `
-  <div>
-    <div class="job-row" onclick="toggleJobTasks('${j.id}')">
       <span class="job-type-badge">${typeLabels[j.type] || j.type}</span>
       <span class="job-target">${j.target_name || j.target_id}</span>
       ${j.client_name ? `<span style="color:var(--muted);font-size:12px">${j.client_name}</span>` : ""}
       <span class="status-badge ${statusClass}">${spinner}${statusLabel}</span>
       ${severityCountsHtml(j)}
-      <span class="job-time">${when}</span>
-    </div>
-    <div id="jobtasks-${j.id}" class="job-tasks hidden"></div>
-  </div>`;
+      <span class="job-time">${when}</span>`;
+}
+
+// Renderiza/actualiza la lista de trabajos SIN destruir los nodos que ya
+// existían: si reemplazáramos todo el innerHTML en cada refresh (como
+// hacía antes), el navegador pierde la posición de scroll y parpadea todo
+// el panel entero cada 4 segundos, aunque haya cambiado una sola palabra.
+function renderJobsList(jobs, container) {
+  if (!jobs.length) {
+    container.innerHTML = `<div class="empty-state">Todavía no se lanzó ningún escaneo.</div>`;
+    return;
+  }
+  if (container.querySelector(":scope > .empty-state")) container.innerHTML = "";
+
+  const wanted = jobs.slice(0, 10);
+  const wantedIds = new Set(wanted.map(j => j.id));
+
+  // Sacar filas de trabajos que ya no están entre los 10 más recientes.
+  Array.from(container.children).forEach(child => {
+    const id = child.dataset.jobId;
+    if (id && !wantedIds.has(id)) child.remove();
+  });
+
+  wanted.forEach((j, idx) => {
+    let wrapper = document.getElementById(`jobwrap-${j.id}`);
+    if (wrapper) {
+      // Ya existe: actualizamos solo el contenido de adentro, sin recrear
+      // el nodo -- así no se pierde el scroll ni se cierra el detalle
+      // expandido de sub-tareas si estaba abierto.
+      const row = wrapper.querySelector(".job-row");
+      if (row) row.innerHTML = jobRowContentHtml(j);
+    } else {
+      wrapper = document.createElement("div");
+      wrapper.id = `jobwrap-${j.id}`;
+      wrapper.dataset.jobId = j.id;
+      wrapper.innerHTML = `
+        <div class="job-row" onclick="toggleJobTasks('${j.id}')">${jobRowContentHtml(j)}</div>
+        <div id="jobtasks-${j.id}" class="job-tasks hidden"></div>`;
+    }
+    // Mantener el orden (más reciente primero) sin recrear nodos ya ubicados.
+    const refNode = container.children[idx];
+    if (refNode !== wrapper) container.insertBefore(wrapper, refNode || null);
+  });
 }
 
 async function toggleJobTasks(jobId) {
@@ -337,20 +370,42 @@ async function loadSubdomainsPanel(domainId, animate = false) {
     if (!seenSubdomainIds[domainId]) seenSubdomainIds[domainId] = new Set();
     const seen = seenSubdomainIds[domainId];
     el.dataset.loaded = "1";
-    el.innerHTML = subs.length ? subs.map(s => subdomainItemHtml(domainId, s, animate && !seen.has(s.id))).join("")
-      : `<div class="empty-state">Sin subdominios descubiertos aún. Probá "Scan domain".</div>`;
-    subs.forEach(s => seen.add(s.id));
-    // El refresh de arriba recrea los divs "svc-*" de cero (siempre
-    // ocultos por defecto) -- si el usuario tenía el panel "Ver detalles"
-    // de algún subdominio abierto, hay que volver a abrirlo y recargar su
-    // contenido, si no se "cierra solo" en cada tick de polling.
-    for (const s of subs) {
+
+    if (!subs.length) {
+      el.innerHTML = `<div class="empty-state">Sin subdominios descubiertos aún. Probá "Scan domain".</div>`;
+      return;
+    }
+    if (el.querySelector(":scope > .empty-state")) el.innerHTML = "";
+
+    // Reconciliación in-place: si reemplazáramos todo el innerHTML acá
+    // (como se hacía antes), el navegador destruye y recrea cada fila en
+    // cada refresh de polling -- eso es lo que causaba el parpadeo y que
+    // se perdiera la posición de scroll cada 4 segundos. Ahora se
+    // actualiza el contenido de las filas que ya existen sin tocar su
+    // nodo raíz, y solo se crean nodos nuevos para subdominios
+    // genuinamente nuevos.
+    subs.forEach((s, idx) => {
+      const rowId = `subitem-${s.id}`;
+      let row = document.getElementById(rowId);
+      if (row) {
+        const head = row.querySelector(".subdomain-head");
+        if (head) head.innerHTML = subdomainHeadInnerHtml(domainId, s);
+      } else {
+        const tmp = document.createElement("div");
+        tmp.innerHTML = subdomainItemHtml(domainId, s).trim();
+        row = tmp.firstElementChild;
+        if (animate && !seen.has(s.id)) row.classList.add("flash-in");
+      }
+      const refNode = el.children[idx];
+      if (refNode !== row) el.insertBefore(row, refNode || null);
+      seen.add(s.id);
+
       if (openServicePanelIds.has(s.id)) {
         const svcEl = document.getElementById(`svc-${s.id}`);
         if (svcEl) svcEl.classList.remove("hidden");
         loadServiceDetailPanel(domainId, s.id, animate);
       }
-    }
+    });
   } catch (e) {
     el.innerHTML = `<div class="empty-state">Error: ${e.message}</div>`;
   }
@@ -368,9 +423,10 @@ async function toggleSubdomains(domainId) {
   await loadSubdomainsPanel(domainId, false);
 }
 
-function subdomainItemHtml(domainId, s, isNew = false) {
-  const statusClass = {scanned:"scanned", queued:"queued", scanning:"scanning", error:"error"}[s.status] || "";
-
+// Contenido interno de la fila (sin el <div class="subdomain-item"> que la
+// envuelve) -- separado para poder actualizar una fila existente in-place
+// sin recrear su nodo raíz.
+function subdomainHeadInnerHtml(domainId, s) {
   const ports = s.ports || [];
   const portsHtml = ports.length
     ? `<span class="ports-inline">${ports.map(p => `<span class="port-pill">${p}</span>`).join("")}</span>`
@@ -390,18 +446,38 @@ function subdomainItemHtml(domainId, s, isNew = false) {
         `<span class="sev-dot"><span class="dot" style="background:${x.color}"></span>${x.n}</span>`).join("")}</span>`
     : (ports.length ? `<span style="color:var(--accent);font-size:11.5px">sin vulnerabilidades</span>` : "");
 
+  const statusClass = {scanned:"scanned", queued:"queued", scanning:"scanning", error:"error"}[s.status] || "";
   return `
-  <div class="subdomain-item ${isNew ? 'flash-in' : ''}">
-    <div class="subdomain-head">
       🔹 <b>${s.name}</b>
       <span class="status-badge ${statusClass}">${s.status}</span>
       ${portsHtml}
       ${dotsHtml}
       <button class="link-btn" onclick="scanServices('${domainId}','${s.id}')">Scan services</button>
-      <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px" onclick="toggleServiceDetail('${domainId}','${s.id}')">Ver detalles</button>
-    </div>
+      <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px" onclick="toggleServiceDetail('${domainId}','${s.id}')">Ver detalles</button>`;
+}
+
+function subdomainItemHtml(domainId, s) {
+  return `
+  <div class="subdomain-item" id="subitem-${s.id}" data-sub-id="${s.id}">
+    <div class="subdomain-head">${subdomainHeadInnerHtml(domainId, s)}</div>
     <div id="svc-${s.id}" class="${openServicePanelIds.has(s.id) ? '' : 'hidden'}" data-domain-id="${domainId}"></div>
   </div>`;
+}
+
+function serviceRowInnerHtml(svc) {
+  const sevs = [
+    {color: "var(--critical)", n: svc.critical}, {color: "var(--high)", n: svc.high},
+    {color: "var(--medium)", n: svc.medium}, {color: "var(--low)", n: svc.low}, {color: "var(--info)", n: svc.info},
+  ];
+  const dots = sevs.filter(x => x.n > 0).map(x =>
+    `<span class="sev-dot"><span class="dot" style="background:${x.color}"></span>${x.n}</span>`).join("");
+  return `
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;width:100%">
+          🔧 <b style="color:var(--text)">${svc.port}/${svc.protocol}</b> — ${svc.product || svc.service_name || "?"} ${svc.version || ""}
+          ${dots || `<span style="color:var(--accent);font-size:11px">sin vulnerabilidades</span>`}
+          <button class="link-btn" onclick="scanVulns('${svc.id}')">Scan vulnerabilities</button>
+        </div>
+        ${svc.banner ? `<div style="color:var(--muted2);font-size:11.5px;font-family:ui-monospace,monospace;margin-left:22px">${svc.banner}</div>` : ""}`;
 }
 
 async function loadServiceDetailPanel(domainId, subId, animate = false) {
@@ -411,25 +487,33 @@ async function loadServiceDetailPanel(domainId, subId, animate = false) {
     const services = await api(`/domains/${domainId}/subdomains/${subId}/services`);
     if (!seenServiceIds[subId]) seenServiceIds[subId] = new Set();
     const seen = seenServiceIds[subId];
-    el.innerHTML = services.length ? services.map(svc => {
-      const sevs = [
-        {color: "var(--critical)", n: svc.critical}, {color: "var(--high)", n: svc.high},
-        {color: "var(--medium)", n: svc.medium}, {color: "var(--low)", n: svc.low}, {color: "var(--info)", n: svc.info},
-      ];
-      const dots = sevs.filter(x => x.n > 0).map(x =>
-        `<span class="sev-dot"><span class="dot" style="background:${x.color}"></span>${x.n}</span>`).join("");
-      const isNew = animate && !seen.has(svc.id);
-      return `
-      <div class="service-row ${isNew ? 'flash-in' : ''}" style="flex-direction:column;align-items:flex-start;border-bottom:1px solid var(--border);padding:8px 0">
-        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;width:100%">
-          🔧 <b style="color:var(--text)">${svc.port}/${svc.protocol}</b> — ${svc.product || svc.service_name || "?"} ${svc.version || ""}
-          ${dots || `<span style="color:var(--accent);font-size:11px">sin vulnerabilidades</span>`}
-          <button class="link-btn" onclick="scanVulns('${svc.id}')">Scan vulnerabilities</button>
-        </div>
-        ${svc.banner ? `<div style="color:var(--muted2);font-size:11.5px;font-family:ui-monospace,monospace;margin-left:22px">${svc.banner}</div>` : ""}
-      </div>`;
-    }).join("") : `<div class="service-row">Sin servicios detectados aún.</div>`;
-    services.forEach(svc => seen.add(svc.id));
+
+    if (!services.length) {
+      el.innerHTML = `<div class="service-row">Sin servicios detectados aún.</div>`;
+      return;
+    }
+    if (el.querySelector(":scope > .service-row.empty-placeholder")) el.innerHTML = "";
+
+    // Misma idea que en el panel de subdominios: actualizar filas
+    // existentes in-place en vez de recrear todo, para no perder scroll
+    // ni parpadear en cada refresh de polling.
+    services.forEach((svc, idx) => {
+      const rowId = `svcrow-${svc.id}`;
+      let row = document.getElementById(rowId);
+      if (row) {
+        row.innerHTML = serviceRowInnerHtml(svc);
+      } else {
+        row = document.createElement("div");
+        row.id = rowId;
+        row.className = "service-row";
+        row.style.cssText = "flex-direction:column;align-items:flex-start;border-bottom:1px solid var(--border);padding:8px 0";
+        row.innerHTML = serviceRowInnerHtml(svc);
+        if (animate && !seen.has(svc.id)) row.classList.add("flash-in");
+      }
+      const refNode = el.children[idx];
+      if (refNode !== row) el.insertBefore(row, refNode || null);
+      seen.add(svc.id);
+    });
   } catch (e) {
     el.innerHTML = `<div class="service-row">Error: ${e.message}</div>`;
   }
