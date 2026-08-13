@@ -721,6 +721,9 @@ function toggleTruncated(uid) {
 // ============================== VULNERABILIDADES ==============================
 async function renderVulnerabilidades() {
   const content = document.getElementById("pageContent");
+  const prevSev = document.getElementById("sevFilter")?.value || "";
+  const prevStatus = document.getElementById("statusFilter")?.value || "";
+
   content.innerHTML = `
     <div class="page-header">
       <div><h1>Vulnerabilidades</h1><p>Hallazgos de nuclei, nmap NSE y searchsploit sobre los servicios descubiertos.</p></div>
@@ -730,13 +733,18 @@ async function renderVulnerabilidades() {
       <div class="filters-row">
         <select id="sevFilter" onchange="renderVulnerabilidades()">
           <option value="">Todas las severidades</option>
-          <option value="critical">Crítica</option><option value="high">Alta</option>
-          <option value="medium">Media</option><option value="low">Baja</option><option value="info">Info</option>
+          <option value="critical" ${prevSev==='critical'?'selected':''}>Crítica</option>
+          <option value="high" ${prevSev==='high'?'selected':''}>Alta</option>
+          <option value="medium" ${prevSev==='medium'?'selected':''}>Media</option>
+          <option value="low" ${prevSev==='low'?'selected':''}>Baja</option>
+          <option value="info" ${prevSev==='info'?'selected':''}>Info</option>
         </select>
         <select id="statusFilter" onchange="renderVulnerabilidades()">
           <option value="">Todos los estados</option>
-          <option value="open">Abierto</option><option value="false_positive">Falso positivo</option>
-          <option value="remediated">Remediado</option><option value="accepted_risk">Riesgo aceptado</option>
+          <option value="open" ${prevStatus==='open'?'selected':''}>Abierto</option>
+          <option value="false_positive" ${prevStatus==='false_positive'?'selected':''}>Falso positivo</option>
+          <option value="remediated" ${prevStatus==='remediated'?'selected':''}>Remediado</option>
+          <option value="accepted_risk" ${prevStatus==='accepted_risk'?'selected':''}>Riesgo aceptado</option>
         </select>
       </div>
       <table class="vuln-table">
@@ -745,12 +753,10 @@ async function renderVulnerabilidades() {
       </table>
     </div>`;
 
-  const sev = document.getElementById("sevFilter")?.value || "";
-  const st = document.getElementById("statusFilter")?.value || "";
   let url = "/vulnerabilities?";
   if (selectedClientId !== "all") url += `client_id=${selectedClientId}&`;
-  if (sev) url += `severity=${sev}&`;
-  if (st) url += `status=${st}&`;
+  if (prevSev) url += `severity=${prevSev}&`;
+  if (prevStatus) url += `status=${prevStatus}&`;
 
   try {
     const vulns = await api(url);
@@ -792,6 +798,14 @@ const ENTITY_LABELS = {
 
 async function renderActividad() {
   const content = document.getElementById("pageContent");
+  // OJO: hay que capturar el filtro elegido ANTES de reconstruir el HTML.
+  // Si se lee document.getElementById(...).value DESPUÉS de reasignar
+  // innerHTML, se está leyendo un <select> recién creado (sin la opción
+  // marcada como "selected"), que siempre vuelve al valor por defecto --
+  // por eso el filtro nunca "pegaba".
+  const prevAction = document.getElementById("actionFilter")?.value || "";
+  const prevEntity = document.getElementById("entityFilter")?.value || "";
+
   content.innerHTML = `
     <div class="page-header">
       <div><h1>Actividad</h1><p>Registro de operaciones de escaneo/detección de vulnerabilidades y de la aplicación web.</p></div>
@@ -801,11 +815,11 @@ async function renderActividad() {
       <div class="filters-row">
         <select id="actionFilter" onchange="renderActividad()">
           <option value="">Todas las acciones</option>
-          ${Object.keys(ACTION_LABELS).map(a => `<option value="${a}">${ACTION_LABELS[a]}</option>`).join("")}
+          ${Object.keys(ACTION_LABELS).map(a => `<option value="${a}" ${a===prevAction?'selected':''}>${ACTION_LABELS[a]}</option>`).join("")}
         </select>
         <select id="entityFilter" onchange="renderActividad()">
           <option value="">Todas las entidades</option>
-          ${Object.keys(ENTITY_LABELS).map(e => `<option value="${e}">${ENTITY_LABELS[e]}</option>`).join("")}
+          ${Object.keys(ENTITY_LABELS).map(e => `<option value="${e}" ${e===prevEntity?'selected':''}>${ENTITY_LABELS[e]}</option>`).join("")}
         </select>
       </div>
       <table>
@@ -814,12 +828,10 @@ async function renderActividad() {
       </table>
     </div>`;
 
-  const actionF = document.getElementById("actionFilter")?.value || "";
-  const entityF = document.getElementById("entityFilter")?.value || "";
   let url = "/audit-log?limit=150&";
   if (selectedClientId !== "all") url += `client_id=${selectedClientId}&`;
-  if (actionF) url += `action=${actionF}&`;
-  if (entityF) url += `entity_type=${entityF}&`;
+  if (prevAction) url += `action=${prevAction}&`;
+  if (prevEntity) url += `entity_type=${prevEntity}&`;
 
   try {
     const logs = await api(url);

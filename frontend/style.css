@@ -1,7 +1,7 @@
 :root{
   --bg:#0a0e14; --sidebar:#0d1117; --panel:#131922; --panel2:#161d29;
   --border:#1f2733; --text:#e6e8ee; --muted:#7b8496; --muted2:#4b5563;
-  --accent:#2dd9b9; --accent-dim:rgba(45,217,185,.12); --accent-text:#0a0e14;
+  --accent:#38bdf8; --accent-dim:rgba(56,189,248,.12); --accent-text:#0a0e14;
   --critical:#ef4444; --high:#f97316; --medium:#eab308; --low:#3b82f6; --info:#6b7280;
   --danger:#f87171;
 }
@@ -82,7 +82,7 @@ select, .btn{background:var(--panel2);color:var(--text);border:1px solid var(--b
 .subdomain-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .status-badge{font-size:10.5px;padding:2px 7px;border-radius:5px;background:var(--panel2);color:var(--muted);
   border:1px solid var(--border);text-transform:uppercase;letter-spacing:.02em;display:inline-flex;align-items:center;gap:5px}
-.status-badge.scanned{color:var(--accent);border-color:rgba(45,217,185,.3)}
+.status-badge.scanned{color:var(--accent);border-color:rgba(56,189,248,.3)}
 .status-badge.queued,.status-badge.scanning{color:#facc15;border-color:rgba(250,204,21,.3)}
 .status-badge.error{color:var(--danger);border-color:rgba(248,113,113,.3)}
 
@@ -91,8 +91,8 @@ select, .btn{background:var(--panel2);color:var(--text);border:1px solid var(--b
 @keyframes spin{to{transform:rotate(360deg)}}
 
 @keyframes flashIn{
-  0%{opacity:0;transform:translateY(-6px);background:rgba(45,217,185,.12)}
-  60%{opacity:1;transform:translateY(0);background:rgba(45,217,185,.12)}
+  0%{opacity:0;transform:translateY(-6px);background:rgba(56,189,248,.12)}
+  60%{opacity:1;transform:translateY(0);background:rgba(56,189,248,.12)}
   100%{background:transparent}
 }
 .flash-in{animation:flashIn 1.6s ease-out}
