@@ -20,13 +20,17 @@ def _client_of_domain(db: Session, domain_id: uuid.UUID) -> uuid.UUID:
 @router.get("")
 def list_subdomains(domain_id: uuid.UUID, db: Session = Depends(get_db)):
     # Trae, en una sola query (nada de N+1 por subdominio), el estado del
-    # subdominio + los puertos abiertos detectados + el conteo de
-    # vulnerabilidades abiertas por severidad de todos sus servicios --
-    # así la fila de cada subdominio puede mostrar esto sin que el
-    # frontend tenga que pedir el detalle de cada uno por separado.
+    # subdominio + las IPs resueltas + los puertos abiertos detectados +
+    # el conteo de vulnerabilidades abiertas por severidad de todos sus
+    # servicios -- así la fila de cada subdominio puede mostrar todo esto
+    # sin que el frontend tenga que pedir el detalle de cada uno aparte.
     rows = db.execute(
         text("""
             SELECT sd.id, sd.domain_id, sd.name, sd.discovery_source, sd.status, sd.last_scan_at,
+                   COALESCE(
+                       array_agg(DISTINCT h.ip_address::text) FILTER (WHERE h.id IS NOT NULL),
+                       '{}'
+                   ) AS ips,
                    COALESCE(
                        array_agg(DISTINCT s.port) FILTER (WHERE s.id IS NOT NULL),
                        '{}'
@@ -48,6 +52,7 @@ def list_subdomains(domain_id: uuid.UUID, db: Session = Depends(get_db)):
     result = []
     for r in rows:
         d = dict(r._mapping)
+        d["ips"] = sorted(ip for ip in (d["ips"] or []) if ip is not None)
         d["ports"] = sorted(p for p in (d["ports"] or []) if p is not None)
         result.append(d)
     return result

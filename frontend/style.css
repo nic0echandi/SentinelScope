@@ -124,6 +124,8 @@ select, .btn{background:var(--panel2);color:var(--text);border:1px solid var(--b
 
 .port-pill{display:inline-block;background:var(--panel2);border:1px solid var(--border);border-radius:5px;
   padding:1px 7px;font-size:11px;font-family:ui-monospace,monospace;color:var(--text)}
+.ip-pill{display:inline-block;background:var(--panel2);border:1px solid var(--border);border-radius:5px;
+  padding:1px 7px;font-size:11px;font-family:ui-monospace,monospace;color:var(--muted)}
 .sev-dot{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:700;color:var(--text)}
 .sev-dot .dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex-shrink:0}
 .ports-inline{display:flex;gap:4px;flex-wrap:wrap}

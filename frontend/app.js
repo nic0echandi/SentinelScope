@@ -427,6 +427,11 @@ async function toggleSubdomains(domainId) {
 // envuelve) -- separado para poder actualizar una fila existente in-place
 // sin recrear su nodo raíz.
 function subdomainHeadInnerHtml(domainId, s) {
+  const ips = s.ips || [];
+  const ipHtml = ips.length
+    ? `<span class="ip-pill" title="${ips.join(', ')}">${ips[0]}${ips.length > 1 ? ` +${ips.length - 1}` : ''}</span>`
+    : `<span style="color:var(--muted);font-size:11.5px">sin IP resuelta</span>`;
+
   const ports = s.ports || [];
   const portsHtml = ports.length
     ? `<span class="ports-inline">${ports.map(p => `<span class="port-pill">${p}</span>`).join("")}</span>`
@@ -450,6 +455,7 @@ function subdomainHeadInnerHtml(domainId, s) {
   return `
       🔹 <b>${s.name}</b>
       <span class="status-badge ${statusClass}">${s.status}</span>
+      ${ipHtml}
       ${portsHtml}
       ${dotsHtml}
       <button class="link-btn" onclick="scanServices('${domainId}','${s.id}')">Scan services</button>
