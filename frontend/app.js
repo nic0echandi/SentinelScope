@@ -929,7 +929,7 @@ async function renderDashboard() {
 }
 
 // ============================== MI CUENTA ==============================
-function renderCuenta() {
+async function renderCuenta() {
   const content = document.getElementById("pageContent");
   content.innerHTML = `
     <div class="page-header"><div><h1>Mi cuenta</h1><p>Datos de tu usuario y cambio de contraseña.</p></div></div>
@@ -947,7 +947,100 @@ function renderCuenta() {
       <input type="password" id="newPass" style="width:100%;background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 11px;margin-bottom:14px">
       <button class="btn btn-primary" onclick="submitChangePassword()">Actualizar contraseña</button>
       <p id="pwMsg" style="margin-top:10px;font-size:13px"></p>
-    </div>`;
+    </div>
+    ${me.role === "admin" ? `
+    <div class="panel">
+      <div class="top-row" style="margin-bottom:14px">
+        <div class="section-label" style="margin-bottom:0">Usuarios</div>
+        <button class="btn btn-primary" onclick="openNewUserModal()">${ICONS.plus} Nuevo usuario</button>
+      </div>
+      <table>
+        <thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Clientes asignados</th><th>Estado</th><th></th></tr></thead>
+        <tbody id="usersBody"><tr><td colspan="6" class="empty-state">Cargando...</td></tr></tbody>
+      </table>
+    </div>` : ""}`;
+
+  if (me.role === "admin") await loadUsersTable();
+}
+
+const ROLE_LABELS = {admin:"Administrador", client_admin:"Tester", viewer_all:"Visualizador (todos)", viewer_scoped:"Visualizador"};
+
+async function loadUsersTable() {
+  try {
+    const users = await api("/users");
+    document.getElementById("usersBody").innerHTML = users.map(u => `
+      <tr>
+        <td>${u.full_name}</td>
+        <td>${u.email}</td>
+        <td>${ROLE_LABELS[u.role] || u.role}</td>
+        <td style="color:var(--muted);font-size:12.5px">${(u.client_names && u.client_names.length) ? u.client_names.join(", ") : "—"}</td>
+        <td><span class="status-badge ${u.active ? 'scanned' : 'error'}">${u.active ? 'activo' : 'inactivo'}</span></td>
+        <td><button class="link-btn" onclick="toggleUserActive('${u.id}', ${!u.active})">${u.active ? 'Desactivar' : 'Activar'}</button></td>
+      </tr>`).join("") || `<tr><td colspan="6" class="empty-state">No hay usuarios.</td></tr>`;
+  } catch (e) {
+    document.getElementById("usersBody").innerHTML = `<tr><td colspan="6" class="empty-state">Error: ${e.message}</td></tr>`;
+  }
+}
+
+async function toggleUserActive(userId, newActive) {
+  try {
+    await api(`/users/${userId}?active=${newActive}`, {method: "PATCH"});
+    toast(newActive ? "Usuario activado." : "Usuario desactivado.");
+    await loadUsersTable();
+  } catch (e) { toast(e.message, true); }
+}
+
+function openNewUserModal() {
+  const clientCheckboxes = clients.map(c => `
+    <label style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px;color:var(--text)">
+      <input type="checkbox" class="nu-client-cb" value="${c.id}"> ${c.name}
+    </label>`).join("") || `<p style="color:var(--muted);font-size:13px">No hay clientes cargados todavía.</p>`;
+
+  showModal(`
+    <h3>Nuevo usuario</h3>
+    <label>Nombre completo</label>
+    <input id="nuName" placeholder="Juan Pérez">
+    <label>Email</label>
+    <input id="nuEmail" placeholder="juan@ejemplo.com">
+    <label>Contraseña temporal</label>
+    <input id="nuPass" type="password" placeholder="Mínimo 10 caracteres">
+    <label>Rol</label>
+    <select id="nuRole" style="width:100%;background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 11px">
+      <option value="viewer_scoped">Visualizador (solo ve resultados)</option>
+      <option value="client_admin">Tester (ejecuta escaneos y ve resultados)</option>
+    </select>
+    <label>Clientes asignados</label>
+    <div style="max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px 12px">
+      ${clientCheckboxes}
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="submitNewUser()">Crear</button>
+    </div>`);
+}
+
+async function submitNewUser() {
+  const full_name = document.getElementById("nuName").value.trim();
+  const email = document.getElementById("nuEmail").value.trim();
+  const temporary_password = document.getElementById("nuPass").value;
+  const role = document.getElementById("nuRole").value;
+  const selectedClientIds = Array.from(document.querySelectorAll(".nu-client-cb:checked")).map(cb => cb.value);
+
+  if (!full_name || !email || !temporary_password) { toast("Completá nombre, email y contraseña.", true); return; }
+  if (temporary_password.length < 10) { toast("La contraseña debe tener al menos 10 caracteres.", true); return; }
+  if (!selectedClientIds.length) { toast("Asigná al menos un cliente.", true); return; }
+
+  // "Tester" (client_admin) necesita access_level=admin para poder escanear;
+  // "Visualizador" (viewer_scoped) solo necesita access_level=viewer.
+  const accessLevel = role === "client_admin" ? "admin" : "viewer";
+  const client_access = selectedClientIds.map(client_id => ({client_id, access_level: accessLevel}));
+
+  try {
+    await api("/users", {method: "POST", body: JSON.stringify({full_name, email, temporary_password, role, client_access})});
+    toast("Usuario creado correctamente.");
+    closeModal();
+    await loadUsersTable();
+  } catch (e) { toast(e.message, true); }
 }
 async function submitChangePassword() {
   const current_password = document.getElementById("curPass").value;

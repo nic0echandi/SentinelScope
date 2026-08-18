@@ -19,9 +19,20 @@ def whoami(db: Session = Depends(get_db), user: CurrentUser = Depends(get_curren
     return dict(row._mapping)
 
 
-@router.get("", response_model=list[UserOut])
+@router.get("")
 def list_users(db: Session = Depends(get_db), user: CurrentUser = Depends(require_roles("admin"))):
-    rows = db.execute(text("SELECT id, email, full_name, role, active, created_at FROM users ORDER BY created_at")).fetchall()
+    rows = db.execute(text("""
+        SELECT u.id, u.email, u.full_name, u.role, u.active, u.created_at,
+               COALESCE(
+                   array_agg(c.name) FILTER (WHERE c.id IS NOT NULL),
+                   '{}'
+               ) AS client_names
+        FROM users u
+        LEFT JOIN user_client_access uca ON uca.user_id = u.id
+        LEFT JOIN clients c ON c.id = uca.client_id
+        GROUP BY u.id
+        ORDER BY u.created_at
+    """)).fetchall()
     return [dict(r._mapping) for r in rows]
 
 
